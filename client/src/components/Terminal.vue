@@ -436,8 +436,9 @@ function isPrintableEchoInput(data) {
   if (!props.optimisticEcho || !term || !data || typeof data !== 'string') return false;
   if (replaySuppressDepth > 0 || mobileCopyMode.value) return false;
   if (data.length > 128) return false;
-  if (data.includes('\x1b')) return false;
-  return !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(data);
+  // 仅对纯 ASCII 可打印字符做本地乐观回显；IME 组合输入（中文等多字节字符）
+  // 提交时机和分片方式与服务端回显不一致，前缀剔除会失配导致重复显示，故跳过。
+  return /^[\x20-\x7e]*$/.test(data);
 }
 
 function echoLocalInput(data) {

@@ -30,6 +30,8 @@ const DEFAULTS = {
   newConversationDefaultDir: '~',
   claudeCommand: '',
   codexCommand: '',
+  claudeArgs: '',
+  codexArgs: '',
 
   username: '',
   language: 'zh',
@@ -48,6 +50,8 @@ const STRING_LIMITS = {
   newConversationDefaultDir: 2048,
   claudeCommand: 2048,
   codexCommand: 2048,
+  claudeArgs: 2048,
+  codexArgs: 2048,
   username: 128,
   language: 16,
 };

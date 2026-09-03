@@ -275,7 +275,28 @@
             </div>
           </div>
         </div>
+
+        <div class="sp-field">
+          <label class="sp-label">{{ t.agent_args }}</label>
+          <div class="sp-agent-grid">
+            <div v-for="field in agentArgsFields" :key="field.id" class="sp-agent-row">
+              <span class="sp-agent-name">{{ field.name }}</span>
+              <input
+                v-model="settings[field.key]"
+                class="sp-input"
+                spellcheck="false"
+                autocorrect="off"
+                autocapitalize="off"
+                :placeholder="field.placeholder"
+                @blur="normalizeCommandSetting(field.key)"
+                @keyup.enter="normalizeCommandSetting(field.key)"
+              />
+            </div>
+          </div>
+        </div>
       </section>
+
+
 
       <!-- ── 语言 ─────────────────────────────────────────────── -->
       <section class="sp-section">
@@ -380,6 +401,10 @@ const agentCommandFields = [
   { id: 'claude', key: 'claudeCommand', name: 'Claude Code', placeholder: 'claude' },
   { id: 'codex', key: 'codexCommand', name: 'Codex', placeholder: 'codex' },
 ];
+const agentArgsFields = [
+  { id: 'claude-args', key: 'claudeArgs', name: 'Claude Code Args', placeholder: '--dangerously-skip-permissions' },
+  { id: 'codex-args', key: 'codexArgs', name: 'Codex Args', placeholder: '--dangerously-bypass-approvals-and-sandbox' },
+];
 const mobileEnterOptions = [
   { value: 'send', labelKey: 'enter_send' },
   { value: 'newline', labelKey: 'enter_newline' },
@@ -467,7 +492,7 @@ function queueAgentRefresh() {
   agentRefreshTimer = setTimeout(refreshAgents, 1200);
 }
 
-watch(() => [settings.claudeCommand, settings.codexCommand], queueAgentRefresh);
+watch(() => [settings.claudeCommand, settings.codexCommand, settings.claudeArgs, settings.codexArgs], queueAgentRefresh);
 
 onMounted(() => {
   refreshAgents();

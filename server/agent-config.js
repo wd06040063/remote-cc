@@ -12,6 +12,29 @@ const PROXY_ENV_KEYS = [
 const BAIDU_CC_CLAUDE_BIN = '/root/.comate/baidu-cc/bin/ducc';
 const BAIDU_CX_CODEX_BIN = '/root/.baidu-cx/baidu-cx/bin/ducx';
 
+// 简易 shell 风格分词：支持单/双引号包裹的参数，用于把用户在设置里
+// 填写的启动参数字符串（如 `--dangerously-skip-permissions --foo "bar baz"`）
+// 拆分成 argv 数组。
+function splitCommandArgs(str) {
+  const out = [];
+  const re = /'([^']*)'|"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(str || ''))) !== null) {
+    out.push(m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : m[3]);
+  }
+  return out;
+}
+
+function customArgsFor(agentId) {
+  try {
+    const settings = getWebSettings().settings || {};
+    const key = `${normalizeAgent(agentId)}Args`;
+    return splitCommandArgs(settings[key]);
+  } catch (_) {
+    return [];
+  }
+}
+
 const AGENTS = {
   claude: {
     id: 'claude',
@@ -34,6 +57,7 @@ const AGENTS = {
       const args = [];
       if (process.env.IS_SANDBOX === '1') args.push('--dangerously-skip-permissions');
       if (resumeSessionId) args.push('--resume', resumeSessionId);
+      args.push(...customArgsFor('claude'));
       return args;
     },
   },
@@ -60,6 +84,7 @@ const AGENTS = {
       const sessionArgs = [
         '--cd', cwd,
         '--no-alt-screen',
+        ...customArgsFor('codex'),
       ];
       if (process.env.IS_SANDBOX === '1') globalArgs.push('--dangerously-bypass-approvals-and-sandbox');
       if (resumeSessionId) return [...globalArgs, 'resume', ...sessionArgs, resumeSessionId];

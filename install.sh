@@ -88,6 +88,130 @@ proxy_input() {
   echo "${val:-$current}"
 }
 
+python_ok_for_node_gyp() {
+  local py="${1:-}"
+  [[ -n "$py" && -x "$py" ]] || return 1
+  "$py" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1
+}
+
+find_node_gyp_python() {
+  local candidate name dir
+  local candidates=()
+
+  [[ -n "${npm_config_python:-}" ]] && candidates+=("$npm_config_python")
+  [[ -n "${PYTHON:-}" ]] && candidates+=("$PYTHON")
+
+  for name in python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+    candidate="$(command -v "$name" 2>/dev/null || true)"
+    [[ -n "$candidate" ]] && candidates+=("$candidate")
+  done
+
+  local search_dirs=()
+  if [[ -n "${PYTHON_SEARCH_DIRS:-}" ]]; then
+    local IFS=':'
+    read -r -a search_dirs <<< "$PYTHON_SEARCH_DIRS"
+  fi
+  search_dirs+=(
+    "$HOME/.pyenv/versions"
+    "$HOME/.local"
+    "/home/work/tools"
+    "/usr/local"
+    "/opt"
+  )
+
+  for dir in "${search_dirs[@]}"; do
+    [[ -d "$dir" ]] || continue
+    for name in python3.12 python3.11 python3.10 python3.9 python3.8; do
+      while IFS= read -r candidate; do
+        candidates+=("$candidate")
+      done < <(find "$dir" -maxdepth 5 -type f -name "$name" -perm -111 2>/dev/null)
+    done
+  done
+
+  for candidate in "${candidates[@]}"; do
+    if python_ok_for_node_gyp "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+compiler_major() {
+  local compiler="${1:-}" version major
+  [[ -n "$compiler" && -x "$compiler" ]] || return 1
+  version="$("$compiler" -dumpfullversion -dumpversion 2>/dev/null || "$compiler" -dumpversion 2>/dev/null || true)"
+  major="${version%%.*}"
+  [[ "$major" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$major"
+}
+
+find_node_gyp_cxx() {
+  local candidate dir major
+  local explicit_candidates=()
+  local candidates=()
+  local search_dirs=()
+  local best="" best_major=0
+
+  [[ -n "${CXX:-}" ]] && explicit_candidates+=("$CXX")
+
+  if [[ ${#explicit_candidates[@]} -gt 0 ]]; then
+    for candidate in "${explicit_candidates[@]}"; do
+      major="$(compiler_major "$candidate" || true)"
+      if [[ "$major" =~ ^[0-9]+$ && "$major" -ge 8 ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  fi
+
+  candidate="$(command -v g++ 2>/dev/null || true)"
+  [[ -n "$candidate" ]] && candidates+=("$candidate")
+
+  if [[ -n "${COMPILER_SEARCH_DIRS:-}" ]]; then
+    local IFS=':'
+    read -r -a search_dirs <<< "$COMPILER_SEARCH_DIRS"
+  fi
+  search_dirs+=(
+    "/home/opt/compiler"
+    "/tmp/rcc-devtoolset9-runtime"
+    "/opt/rh"
+    "/usr/local"
+    "$HOME/.local"
+  )
+
+  for dir in "${search_dirs[@]}"; do
+    [[ -d "$dir" ]] || continue
+    while IFS= read -r candidate; do
+      candidates+=("$candidate")
+    done < <(find "$dir" -maxdepth 8 -type f -name "g++" -perm -111 2>/dev/null)
+  done
+
+  for candidate in "${candidates[@]}"; do
+    major="$(compiler_major "$candidate" || true)"
+    [[ "$major" =~ ^[0-9]+$ && "$major" -ge 8 ]] || continue
+    if [[ -z "$best" || "$major" -lt "$best_major" ]]; then
+      best="$candidate"
+      best_major="$major"
+    fi
+  done
+
+  [[ -n "$best" ]] || return 1
+  printf '%s\n' "$best"
+}
+
+find_companion_cc() {
+  local cxx="${1:-}" dir candidate
+  [[ -n "$cxx" ]] || return 1
+  dir="$(dirname "$cxx")"
+  for candidate in "$dir/gcc" "$(command -v gcc 2>/dev/null || true)" "$dir/cc"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 [[ "$NON_INTERACTIVE" == "0" ]] && print_banner
 echo -e "  欢迎使用 ${B}RemoteCC${R} 一键部署向导\n"
@@ -115,11 +239,28 @@ ok "Node.js $NODE_VER"
 command -v npm &>/dev/null || err "未找到 npm"
 ok "npm $(npm --version)"
 
-# g++（node-pty-prebuilt-multiarch 使用预编译二进制，通常不需要 g++）
-if command -v g++ &>/dev/null; then
-  ok "g++ $(g++ --version | head -1 | grep -oP '\d+\.\d+\.\d+' | head -1)"
+# g++（node-pty 在缺少预编译产物时需要本机编译，要求支持 C++17）
+if NODE_GYP_CXX="$(find_node_gyp_cxx)"; then
+  export CXX="$NODE_GYP_CXX"
+  if NODE_GYP_CC="$(find_companion_cc "$CXX")"; then
+    export CC="$NODE_GYP_CC"
+  fi
+  case " ${LDFLAGS:-} " in
+    *" -static-libstdc++ "* ) ;;
+    * ) export LDFLAGS="${LDFLAGS:+$LDFLAGS }-static-libstdc++" ;;
+  esac
+  case " ${LDFLAGS:-} " in
+    *" -static-libgcc "* ) ;;
+    * ) export LDFLAGS="${LDFLAGS:+$LDFLAGS }-static-libgcc" ;;
+  esac
+  CXX_VER=$("$CXX" --version 2>/dev/null | head -1 || echo "$CXX")
+  ok "C++ 编译器: $CXX_VER ($CXX)"
 else
-  info "未检测到 g++（使用预编译 node-pty，无需编译）"
+  if command -v g++ &>/dev/null; then
+    warn "未找到支持 C++17 的 g++；当前默认版本为 $(g++ --version 2>/dev/null | head -1)"
+  else
+    info "未检测到 g++（如果 node-pty 无预编译产物会安装失败）"
+  fi
 fi
 
 # ── Step 2: 自动检测 Agent CLI ────────────────────────────────────────────────
@@ -138,9 +279,11 @@ fi
 CANDIDATES=(
   "$(command -v claude 2>/dev/null || true)"
 )
-for v in "${NVM_NODE_DIRS[@]}"; do
-  CANDIDATES+=("$HOME/.nvm/versions/node/$v/bin/claude")
-done
+if [[ ${#NVM_NODE_DIRS[@]} -gt 0 ]]; then
+  for v in "${NVM_NODE_DIRS[@]}"; do
+    CANDIDATES+=("$HOME/.nvm/versions/node/$v/bin/claude")
+  done
+fi
 
 for c in "${CANDIDATES[@]}"; do
   if [[ -n "$c" && -x "$c" ]]; then
@@ -154,9 +297,11 @@ done
 CODEX_CANDIDATES=(
   "$(command -v codex 2>/dev/null || true)"
 )
-for v in "${NVM_NODE_DIRS[@]}"; do
-  CODEX_CANDIDATES+=("$HOME/.nvm/versions/node/$v/bin/codex")
-done
+if [[ ${#NVM_NODE_DIRS[@]} -gt 0 ]]; then
+  for v in "${NVM_NODE_DIRS[@]}"; do
+    CODEX_CANDIDATES+=("$HOME/.nvm/versions/node/$v/bin/codex")
+  done
+fi
 
 for c in "${CODEX_CANDIDATES[@]}"; do
   if [[ -n "$c" && -x "$c" ]]; then
@@ -264,6 +409,13 @@ step "安装依赖"
 
 echo -e "  ${GRAY}安装服务端依赖（含 node-pty 原生编译）...${R}"
 
+if NODE_GYP_PYTHON="$(find_node_gyp_python)"; then
+  export npm_config_python="$NODE_GYP_PYTHON"
+  ok "node-gyp Python: $NODE_GYP_PYTHON ($("$NODE_GYP_PYTHON" --version 2>&1 | head -1))"
+else
+  warn "未找到 Python >= 3.8；如 node-pty 需要本机编译，npm install 可能失败"
+fi
+
 # node-gyp 编译原生模块时使用 ~/.cache/node-gyp/<ver>/include/node/common.gypi，
 # 该缓存由 node-gyp 从 node 安装目录复制而来。
 # 策略：
@@ -281,7 +433,9 @@ fi
 COMMON_GYPI="$(node -e "process.stdout.write(require('path').join(process.execPath,'../../include/node/common.gypi'))")"
 PATCHED=false
 GPP_MAJOR=""
-if command -v g++ &>/dev/null; then
+if [[ -n "${CXX:-}" ]]; then
+  GPP_MAJOR=$("$CXX" -dumpversion 2>/dev/null | cut -d. -f1 || true)
+elif command -v g++ &>/dev/null; then
   GPP_MAJOR=$(g++ -dumpversion 2>/dev/null | cut -d. -f1 || true)
 fi
 
