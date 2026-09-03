@@ -178,7 +178,6 @@
             :key="entry.sid"
             v-show="entry.sid === activeSessionId"
             :theme="theme"
-            optimistic-echo
             :ref="el => setTermRef(entry.sid, el)"
             @input="onTermInput(entry.sid, $event)"
             @resize="onTermResize(entry.sid, $event)"
